@@ -1,0 +1,8 @@
+{
+  "name": "Bangla Voice Hub",
+  "description": "Complete Bangla and English voice-to-text, translation, and AI prompt web app with real-time transcription and file upload features.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": []
+}
