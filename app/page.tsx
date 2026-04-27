@@ -319,6 +319,7 @@ export default function Home() {
                     <motion.div
                       layoutId="mainTabIndicator"
                       className="absolute inset-0 bg-white dark:bg-zinc-700 rounded-xl shadow-sm -z-10"
+                      transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
                     />
                   )}
                 </button>
@@ -399,10 +400,14 @@ export default function Home() {
           </div>
 
           {mainTab === "Voice" && (
-            <button
+            <motion.button
               onClick={toggleRecording}
-              className={`p-6 rounded-3xl text-white shadow-xl flex flex-col items-center justify-center text-center gap-3 transition-colors relative overflow-hidden ${
-                isRecording ? "bg-red-500 shadow-red-200 dark:shadow-none" : "bg-indigo-600 shadow-indigo-200 dark:shadow-none hover:bg-indigo-700"
+              whileTap={{ scale: 0.95 }}
+              animate={{ 
+                backgroundColor: isRecording ? "#ef4444" : "#4f46e5"
+              }}
+              className={`p-6 rounded-3xl text-white shadow-xl flex flex-col items-center justify-center text-center gap-3 transition-shadow relative overflow-hidden ${
+                isRecording ? "shadow-red-200 dark:shadow-none" : "shadow-indigo-200 dark:shadow-none hover:shadow-indigo-300"
               }`}
             >
               {isRecording && (
@@ -421,7 +426,7 @@ export default function Home() {
               <p className={`text-xs font-semibold z-10 ${isRecording ? "text-red-100" : "text-indigo-100"}`}>
                 {isRecording ? "Recording active" : "Ready to dictate"}
               </p>
-            </button>
+            </motion.button>
           )}
         </aside>
 
@@ -434,10 +439,17 @@ export default function Home() {
                   <button
                     key={tab}
                     onClick={() => setOutputTab(tab)}
-                    className={`px-4 sm:px-6 py-2 rounded-xl text-sm font-semibold whitespace-nowrap transition-colors relative ${
-                      outputTab === tab ? "bg-white dark:bg-zinc-700 shadow-sm text-indigo-600 dark:text-indigo-400" : "text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-200"
+                    className={`px-4 sm:px-6 py-2 rounded-xl text-sm font-semibold whitespace-nowrap transition-colors relative z-10 ${
+                      outputTab === tab ? "text-indigo-600 dark:text-indigo-400" : "text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-200"
                     }`}
                   >
+                    {outputTab === tab && (
+                      <motion.div
+                        layoutId="outputTabIndicator"
+                        className="absolute inset-0 bg-white dark:bg-zinc-700 shadow-sm rounded-xl -z-10"
+                        transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                      />
+                    )}
                     {tab}
                   </button>
                 ))}
@@ -447,9 +459,19 @@ export default function Home() {
                    onClick={() => handleCopy(getActiveText())}
                    disabled={!getActiveText() || isProcessing}
                    title="Copy text"
-                   className="p-2 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 disabled:opacity-50 transition-colors"
+                   className="p-2 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 disabled:opacity-50 transition-colors relative flex items-center justify-center w-9 h-9 rounded-lg"
                  >
-                   {copying ? <Check size={20} className="text-green-500" /> : <Copy size={20} />}
+                   <AnimatePresence mode="wait">
+                     {copying ? (
+                       <motion.div key="check" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }} transition={{ duration: 0.15 }}>
+                         <Check size={20} className="text-green-500" />
+                       </motion.div>
+                     ) : (
+                       <motion.div key="copy" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }} transition={{ duration: 0.15 }}>
+                         <Copy size={20} />
+                       </motion.div>
+                     )}
+                   </AnimatePresence>
                  </button>
               </div>
             </div>
@@ -511,7 +533,19 @@ export default function Home() {
                 <div className="mt-8 pt-8 border-t border-slate-100 dark:border-zinc-800">
                   <div className="flex items-center justify-between mb-4 font-sans">
                     <h3 className="text-xs font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">Translation ({translateTarget})</h3>
-                    <button onClick={() => handleCopy(translation)} className="text-slate-400 hover:text-indigo-600 transition-colors"><Copy size={16}/></button>
+                    <button onClick={() => handleCopy(translation)} className="text-slate-400 hover:text-indigo-600 transition-colors w-8 h-8 flex items-center justify-center relative rounded-md">
+                      <AnimatePresence mode="wait">
+                        {copying ? (
+                          <motion.div key="check" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }} transition={{ duration: 0.15 }}>
+                            <Check size={16} className="text-green-500" />
+                          </motion.div>
+                        ) : (
+                          <motion.div key="copy" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }} transition={{ duration: 0.15 }}>
+                            <Copy size={16} />
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </button>
                   </div>
                   <p className="text-lg sm:text-xl text-slate-600 dark:text-zinc-400 italic leading-relaxed">
                     {translation}
