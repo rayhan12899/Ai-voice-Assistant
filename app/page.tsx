@@ -25,6 +25,8 @@ export default function Home() {
   const [outputTab, setOutputTab] = useState<"Original" | "Refine" | "AI Prompt">("Original");
   const [showSettings, setShowSettings] = useState(false);
   const [customApiKey, setCustomApiKey] = useState("");
+  const [selectedModel, setSelectedModel] = useState("gemini-3-flash-preview");
+  const [temperature, setTemperature] = useState(0.7);
   
   // Voice State
   const [isRecording, setIsRecording] = useState(false);
@@ -93,7 +95,7 @@ export default function Home() {
            try {
              const base64 = await getBase64FromBlob(audioBlob);
              const langHint = voiceLang === "bn-BD" ? "Bangla" : "English";
-             const text = await transcribeAudio(base64, audioBlob.type || 'audio/webm', langHint, customApiKey);
+             const text = await transcribeAudio(base64, audioBlob.type || 'audio/webm', langHint, customApiKey, selectedModel, temperature);
              // Final transcription text
              const newTrans = text.trim();
              setTranscript(newTrans);
@@ -126,7 +128,7 @@ export default function Home() {
             const currentBlob = new Blob([...audioChunksRef.current], { type: mediaRecorder.mimeType });
             const base64 = await getBase64FromBlob(currentBlob);
             const langHint = voiceLang === "bn-BD" ? "Bangla" : "English";
-            const text = await transcribeAudio(base64, currentBlob.type || 'audio/webm', langHint, customApiKey);
+            const text = await transcribeAudio(base64, currentBlob.type || 'audio/webm', langHint, customApiKey, selectedModel, temperature);
             if (isRecordingRef.current && text && text.trim().length > 0) {
                 const newTrans = text.trim();
                 setTranscript(newTrans);
@@ -138,7 +140,7 @@ export default function Home() {
           } finally {
             isTranscribingInterimRef.current = false;
           }
-        }, 1500);
+        }, 1000);
 
       } catch (err) {
         console.error(err);
@@ -161,7 +163,7 @@ export default function Home() {
     resetProcessed();
     try {
       const base64 = await getBase64FromBlob(audioFile);
-      const text = await transcribeAudio(base64, audioFile.type, undefined, customApiKey);
+      const text = await transcribeAudio(base64, audioFile.type, undefined, customApiKey, selectedModel, temperature);
       setTranscript(text);
       fullTranscriptRef.current = text;
       setOutputTab("Original");
@@ -189,7 +191,7 @@ export default function Home() {
     if (!transcript) return;
     setIsProcessing(true);
     try {
-      const res = await refineTextToAI(transcript, mode, promptTarget, customApiKey);
+      const res = await refineTextToAI(transcript, mode, promptTarget, customApiKey, selectedModel, temperature);
       if (mode === "Refine") setRefinedText(res);
       else setPromptText(res);
     } catch (err: any) {
@@ -208,7 +210,7 @@ export default function Home() {
     setIsTranslating(true);
     
     try {
-      const { translation: tText, vocabulary } = await translateWithVocab(textToTranslate.trim(), translateTarget, customApiKey);
+      const { translation: tText, vocabulary } = await translateWithVocab(textToTranslate.trim(), translateTarget, customApiKey, selectedModel, temperature);
       if (currentToken === translateTokenRef.current) {
         setTranslation(tText);
         setVocab(vocabulary);
@@ -675,8 +677,32 @@ export default function Home() {
                     className="w-full px-4 py-3 bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-800 dark:text-zinc-200 transition-colors"
                   />
                   <p className="mt-2 text-xs font-semibold text-slate-500 dark:text-zinc-400">
-                    If empty, the app will try to use the system default key. Your key is only used locally.
+                    If empty, the app will try to use the system default key.
                   </p>
+                </div>
+                <div>
+                    <label className="block text-sm font-bold text-slate-700 dark:text-zinc-300 mb-2">Model</label>
+                    <select
+                        value={selectedModel}
+                        onChange={(e) => setSelectedModel(e.target.value)}
+                        className="w-full px-4 py-3 bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-800 dark:text-zinc-200"
+                    >
+                        <option value="gemini-3-flash-preview">Gemini 3 Flash (Preview)</option>
+                        <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                        <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+                    </select>
+                </div>
+                <div>
+                    <label className="block text-sm font-bold text-slate-700 dark:text-zinc-300 mb-2">Temperature: {temperature}</label>
+                    <input
+                        type="range"
+                        min="0"
+                        max="2"
+                        step="0.1"
+                        value={temperature}
+                        onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                        className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                    />
                 </div>
               </div>
               

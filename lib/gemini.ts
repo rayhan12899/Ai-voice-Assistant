@@ -9,9 +9,16 @@ const getAI = (customKey?: string) => {
 };
 
 // Use flash-preview for general fast transcription/multimodal tasks
-const MODEL = "gemini-3-flash-preview";
+const DEFAULT_MODEL = "gemini-3-flash-preview";
 
-export async function refineTextToAI(text: string, mode: 'Refine' | 'AI Prompt', promptType: string = 'ChatGPT', customKey?: string): Promise<string> {
+export async function refineTextToAI(
+  text: string, 
+  mode: 'Refine' | 'AI Prompt', 
+  promptType: string = 'ChatGPT', 
+  customKey?: string,
+  model: string = DEFAULT_MODEL,
+  temperature: number = 0.7
+): Promise<string> {
   if (!text.trim()) return "";
   const ai = getAI(customKey);
   
@@ -24,11 +31,11 @@ export async function refineTextToAI(text: string, mode: 'Refine' | 'AI Prompt',
   
   try {
     const response = await ai.models.generateContent({
-      model: MODEL,
+      model: model,
       contents: text,
       config: {
         systemInstruction,
-        temperature: 0.7,
+        temperature: temperature,
       }
     });
     return response.text?.trim() || "";
@@ -38,16 +45,26 @@ export async function refineTextToAI(text: string, mode: 'Refine' | 'AI Prompt',
   }
 }
 
-export async function transcribeAudio(base64Data: string, mimeType: string, langHint: string = "English or Bangla", customKey?: string): Promise<string> {
+export async function transcribeAudio(
+  base64Data: string, 
+  mimeType: string, 
+  langHint: string = "English or Bangla", 
+  customKey?: string,
+  model: string = DEFAULT_MODEL,
+  temperature: number = 0.2
+): Promise<string> {
   const ai = getAI(customKey);
   try {
     const response = await ai.models.generateContent({
-      model: MODEL,
+      model: model,
       contents: {
         parts: [
            { inlineData: { data: base64Data, mimeType } },
-           { text: `Listen carefully. Transcribe this audio exactly as it is spoken. The primary language is likely ${langHint}, but it could be a mix of English and Bangla. Only return the final transcript text without any extra narrative, markdown, or greetings.` }
+           { text: `Listen carefully. Transcribe this audio exactly as it is spoken. The primary language is likely ${langHint}, but it could be a mix of English and Bangla. CRITICAL: Remove all filler words (like 'um', 'uh', 'mane', 'er', 'এ', 'ও', 'আর') and stutters immediately. Only return the final transcript text without any extra narrative, markdown, or greetings.` }
         ]
+      },
+      config: {
+        temperature: temperature,
       }
     });
     return response.text?.trim() || "";
@@ -57,12 +74,18 @@ export async function transcribeAudio(base64Data: string, mimeType: string, lang
   }
 }
 
-export async function translateWithVocab(text: string, targetLang: 'Bangla' | 'English', customKey?: string) {
+export async function translateWithVocab(
+  text: string, 
+  targetLang: 'Bangla' | 'English', 
+  customKey?: string,
+  model: string = DEFAULT_MODEL,
+  temperature: number = 0.3
+) {
   if (!text.trim()) return { translation: "", vocabulary: [] };
   const ai = getAI(customKey);
   try {
     const response = await ai.models.generateContent({
-      model: MODEL,
+      model: model,
       contents: `Translate the following text into ${targetLang}. Also extract up to 6 important words or phrases as vocabulary with their meanings in ${targetLang}. Text: "${text}"`,
       config: {
         responseMimeType: "application/json",
@@ -82,7 +105,8 @@ export async function translateWithVocab(text: string, targetLang: 'Bangla' | 'E
             }
           },
           required: ["translation", "vocabulary"]
-        }
+        },
+        temperature: temperature,
       }
     });
     const parsed = JSON.parse(response.text || "{}");
