@@ -257,6 +257,23 @@ export default function Home() {
     return transcript;
   };
 
+  // Auto-save/load transcript
+  useEffect(() => {
+    const savedTranscript = localStorage.getItem('ai-voice-transcript');
+    if (savedTranscript) {
+      setTranscript(savedTranscript);
+      fullTranscriptRef.current = savedTranscript;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (transcript) {
+      localStorage.setItem('ai-voice-transcript', transcript);
+    } else {
+      localStorage.removeItem('ai-voice-transcript');
+    }
+  }, [transcript]);
+
   // Prevent hydration mismatch for theme
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
