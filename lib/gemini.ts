@@ -51,7 +51,8 @@ export async function transcribeAudio(
   langHint: string = "English or Bangla", 
   customKey?: string,
   model: string = DEFAULT_MODEL,
-  temperature: number = 0.2
+  temperature: number = 0.2,
+  sensitivity: number = 0.5
 ): Promise<string> {
   const ai = getAI(customKey);
   try {
@@ -60,7 +61,7 @@ export async function transcribeAudio(
       contents: {
         parts: [
            { inlineData: { data: base64Data, mimeType } },
-           { text: `Listen carefully. Transcribe this audio exactly as it is spoken. The primary language is likely ${langHint}, but it could be a mix of English and Bangla. CRITICAL: Remove all filler words (like 'um', 'uh', 'mane', 'er', 'এ', 'ও', 'আর') and stutters immediately. Only return the final transcript text without any extra narrative, markdown, or greetings.` }
+           { text: `Listen carefully. Transcribe this audio exactly as it is spoken. The sensitivity level for interpreting the audio is ${sensitivity}. The primary language is likely ${langHint}, but it could be a mix of English and Bangla. CRITICAL: Remove all filler words (like 'um', 'uh', 'mane', 'er', 'এ', 'ও', 'আর') and stutters immediately. Only return the final transcript text without any extra narrative, markdown, or greetings.` }
         ]
       },
       config: {

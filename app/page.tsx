@@ -5,6 +5,7 @@ import { Mic, Upload, StopCircle, RefreshCw, Languages, Copy, Check, Info, Bot, 
 import { useTheme } from "next-themes";
 import { refineTextToAI, transcribeAudio, translateWithVocab } from "@/lib/gemini";
 import { motion, AnimatePresence } from "motion/react";
+import { Tooltip } from "@/components/Tooltip";
 
 const getBase64FromBlob = (blob: Blob): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -27,19 +28,34 @@ export default function Home() {
   const [customApiKey, setCustomApiKey] = useState("");
   const [selectedModel, setSelectedModel] = useState("gemini-3-flash-preview");
   const [temperature, setTemperature] = useState(0.7);
+  const [sensitivity, setSensitivity] = useState(0.5);
+  const [silenceThreshold, setSilenceThreshold] = useState(0.05);
+  const [silenceDuration, setSilenceDuration] = useState(3);
   
   // Voice State
   const [isRecording, setIsRecording] = useState(false);
+  const [volumeBars, setVolumeBars] = useState<number[]>(new Array(5).fill(0));
   const [voiceLang, setVoiceLang] = useState<"bn-BD" | "en-US">("bn-BD");
   const [transcript, setTranscript] = useState("");
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
 
-  // Stable refs
+  // Stable refs for silence detection
   const isRecordingRef = useRef(false);
   const interimIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isTranscribingInterimRef = useRef(false);
   const fullTranscriptRef = useRef("");
+  const silenceCounterRef = useRef(0);
+  const silenceThresholdRef = useRef(0.05);
+  const silenceDurationRef = useRef(3);
+
+  useEffect(() => {
+    silenceThresholdRef.current = silenceThreshold;
+    silenceDurationRef.current = silenceDuration;
+  }, [silenceThreshold, silenceDuration]);
 
   // Upload State
   const [audioFile, setAudioFile] = useState<File | null>(null);
@@ -65,6 +81,19 @@ export default function Home() {
 
   // General State
   const [copying, setCopying] = useState(false);
+  const [history, setHistory] = useState<string[]>([]);
+  
+  useEffect(() => {
+      const savedHistory = localStorage.getItem('ai-voice-history');
+      if (savedHistory) setHistory(JSON.parse(savedHistory));
+  }, []);
+
+  const addToHistory = (text: string) => {
+      if (!text.trim()) return;
+      const newHistory = [text, ...history].slice(0, 5); // Keep last 5
+      setHistory(newHistory);
+      localStorage.setItem('ai-voice-history', JSON.stringify(newHistory));
+  };
 
   const toggleRecording = async () => {
     if (isRecording) {
@@ -74,10 +103,54 @@ export default function Home() {
       }
       isRecordingRef.current = false;
       setIsRecording(false);
+      setVolumeBars(new Array(5).fill(0));
       if (interimIntervalRef.current) clearInterval(interimIntervalRef.current);
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+      if (audioContextRef.current) audioContextRef.current.close().catch(console.error);
     } else {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        
+        // Setup AudioContext for visualization
+        const audioCtx = new AudioContext();
+        const source = audioCtx.createMediaStreamSource(stream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 64;
+        source.connect(analyser);
+        audioContextRef.current = audioCtx;
+        analyserRef.current = analyser;
+
+        // Visualization loop
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        silenceCounterRef.current = 0;
+        const update = () => {
+          if (!isRecordingRef.current) return;
+          analyser.getByteFrequencyData(data);
+          // Process data for 5 bars
+          let sum = 0;
+          const bars = new Array(5).fill(0).map((_, i) => {
+              const val = (data[i * 2] || 0) / 255;
+              sum += val;
+              return Math.max(0.1, val);
+          });
+          const avgVolume = sum / 5;
+          setVolumeBars(bars);
+          
+          if (avgVolume < silenceThresholdRef.current) {
+            silenceCounterRef.current += 1/60; // Assuming ~60fps
+          } else {
+            silenceCounterRef.current = 0;
+          }
+          
+          if (silenceCounterRef.current >= silenceDurationRef.current) {
+            toggleRecording(); // Stop recording
+            return;
+          }
+          
+          animationFrameRef.current = requestAnimationFrame(update);
+        };
+        update();
+        
         const mediaRecorder = new MediaRecorder(stream);
         mediaRecorderRef.current = mediaRecorder;
         audioChunksRef.current = [];
@@ -95,11 +168,12 @@ export default function Home() {
            try {
              const base64 = await getBase64FromBlob(audioBlob);
              const langHint = voiceLang === "bn-BD" ? "Bangla" : "English";
-             const text = await transcribeAudio(base64, audioBlob.type || 'audio/webm', langHint, customApiKey, selectedModel, temperature);
+             const text = await transcribeAudio(base64, audioBlob.type || 'audio/webm', langHint, customApiKey, selectedModel, temperature, sensitivity);
              // Final transcription text
              const newTrans = text.trim();
              setTranscript(newTrans);
              fullTranscriptRef.current = newTrans;
+             addToHistory(newTrans);
              setOutputTab("Original");
              
              // Auto refine when stopping!
@@ -119,7 +193,7 @@ export default function Home() {
         setIsRecording(true);
         setTranscript("");
         fullTranscriptRef.current = "";
-
+        
         // Pseudo-realtime interval processing
         interimIntervalRef.current = setInterval(async () => {
           if (isTranscribingInterimRef.current || audioChunksRef.current.length === 0 || !isRecordingRef.current) return;
@@ -128,7 +202,7 @@ export default function Home() {
             const currentBlob = new Blob([...audioChunksRef.current], { type: mediaRecorder.mimeType });
             const base64 = await getBase64FromBlob(currentBlob);
             const langHint = voiceLang === "bn-BD" ? "Bangla" : "English";
-            const text = await transcribeAudio(base64, currentBlob.type || 'audio/webm', langHint, customApiKey, selectedModel, temperature);
+            const text = await transcribeAudio(base64, currentBlob.type || 'audio/webm', langHint, customApiKey, selectedModel, temperature, sensitivity);
             if (isRecordingRef.current && text && text.trim().length > 0) {
                 const newTrans = text.trim();
                 setTranscript(newTrans);
@@ -163,9 +237,10 @@ export default function Home() {
     resetProcessed();
     try {
       const base64 = await getBase64FromBlob(audioFile);
-      const text = await transcribeAudio(base64, audioFile.type, undefined, customApiKey, selectedModel, temperature);
+      const text = await transcribeAudio(base64, audioFile.type, undefined, customApiKey, selectedModel, temperature, sensitivity);
       setTranscript(text);
       fullTranscriptRef.current = text;
+      addToHistory(text);
       setOutputTab("Original");
     } catch (err: any) {
       alert(err.message);
@@ -201,6 +276,12 @@ export default function Home() {
     }
   };
 
+  const getActiveText = () => {
+    if (outputTab === "Refine") return refinedText || transcript;
+    if (outputTab === "AI Prompt") return promptText || transcript;
+    return transcript;
+  };
+
   const doTranslate = async (overrideText?: string) => {
     const textToTranslate = typeof overrideText === 'string' ? overrideText : getActiveText();
     if (!textToTranslate || !textToTranslate.trim()) return;
@@ -225,38 +306,6 @@ export default function Home() {
     }
   };
 
-  // Auto-translate effect
-  useEffect(() => {
-    if (autoTranslate && transcript.trim()) {
-       if (translateTimeoutRef.current) clearTimeout(translateTimeoutRef.current);
-       translateTimeoutRef.current = setTimeout(() => {
-           if (outputTab === "Original" && transcript.trim() !== lastTranslatedTextRef.current) {
-               doTranslate(transcript);
-           }
-       }, 800); // Automatically translate after 800ms of silence
-    }
-    return () => {
-       if (translateTimeoutRef.current) clearTimeout(translateTimeoutRef.current);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transcript, autoTranslate, outputTab]);
-
-  useEffect(() => {
-    if (outputTab === "Refine" && !refinedText && transcript && !isProcessing) {
-      processText("Refine");
-    }
-    if (outputTab === "AI Prompt" && !promptText && transcript && !isProcessing) {
-      processText("AI Prompt");
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [outputTab, promptTarget]);
-
-  const getActiveText = () => {
-    if (outputTab === "Refine") return refinedText || transcript;
-    if (outputTab === "AI Prompt") return promptText || transcript;
-    return transcript;
-  };
-
   // Auto-save/load transcript
   useEffect(() => {
     const savedTranscript = localStorage.getItem('ai-voice-transcript');
@@ -279,52 +328,56 @@ export default function Home() {
   useEffect(() => setMounted(true), []);
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-zinc-50 font-sans flex flex-col overflow-x-hidden">
+    <div className="min-h-screen bg-[#0f041a] text-slate-100 font-sans flex flex-col overflow-x-hidden">
       {/* Header */}
-      <nav className="h-16 px-4 md:px-8 border-b border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex items-center justify-between shrink-0">
+      <nav className="h-16 px-4 md:px-8 border-b border-white/10 bg-transparent flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-200 dark:shadow-none">
+          <div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-500/20">
             <Mic size={24} className="text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-slate-800 dark:text-zinc-100 flex items-center gap-2">
-              Bangla Voice <span className="text-indigo-600 dark:text-indigo-400">Hub</span>
+            <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+              Voice <span className="text-indigo-400">Assistant</span>
             </h1>
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <button
-            onClick={() => setShowSettings(!showSettings)}
-            className="p-2 bg-slate-100 dark:bg-zinc-800 rounded-full text-slate-500 hover:text-slate-700 dark:text-zinc-400 dark:hover:text-zinc-200 transition"
-            title="Settings"
-          >
-            <Settings size={20} />
-          </button>
+          <Tooltip text="App Settings">
+            <button
+              onClick={() => setShowSettings(!showSettings)}
+              className="p-2 bg-white/5 hover:bg-white/10 rounded-full text-indigo-200 transition"
+            >
+              <Settings size={20} />
+            </button>
+          </Tooltip>
           
           {mounted && (
-            <div className="flex bg-slate-100 dark:bg-zinc-800 p-1 rounded-full items-center">
-              <button
-                onClick={() => setTheme("light")}
-                className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-colors ${theme !== 'dark' ? 'bg-white dark:bg-zinc-700 shadow-sm text-slate-800 dark:text-zinc-100' : 'text-slate-500 hover:text-slate-700'}`}
-              >
-                Light
-              </button>
-              <button
-                onClick={() => setTheme("dark")}
-                className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-colors ${theme === 'dark' ? 'bg-white dark:bg-zinc-700 shadow-sm text-slate-800 dark:text-zinc-100' : 'text-slate-500 hover:text-slate-700'}`}
-              >
-                Dark
-              </button>
+            <div className="flex bg-white/5 p-1 rounded-full items-center border border-white/10">
+              <Tooltip text="Switch to Light Theme">
+                <button
+                  onClick={() => setTheme("light")}
+                  className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-colors ${theme !== 'dark' ? 'bg-indigo-600 shadow-sm text-white' : 'text-indigo-200 hover:text-white'}`}
+                >
+                  Light
+                </button>
+              </Tooltip>
+              <Tooltip text="Switch to Dark Theme">
+                <button
+                  onClick={() => setTheme("dark")}
+                  className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-colors ${theme === 'dark' ? 'bg-indigo-600 shadow-sm text-white' : 'text-indigo-200 hover:text-white'}`}
+                >
+                  Dark
+                </button>
+              </Tooltip>
             </div>
           )}
         </div>
       </nav>
 
-      <main className="flex-1 p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 pb-20">
-        {/* Sidebar Controls */}
+      <main className="flex-1 p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 pb-20">        {/* Sidebar Controls */}
         <aside className="col-span-1 lg:col-span-3 flex flex-col gap-4">
-          <div className="bg-white dark:bg-zinc-900 p-5 rounded-3xl border border-slate-200 dark:border-zinc-800 shadow-sm">
-            <div className="flex bg-slate-100 dark:bg-zinc-800 p-1 rounded-2xl mb-4 relative">
+          <div className="bg-white/5 backdrop-blur-md p-5 rounded-3xl border border-white/10 shadow-xl">
+            <div className="flex bg-black/20 p-1 rounded-2xl mb-4 relative">
               {(["Voice", "Upload"] as const).map((tab) => (
                 <button
                   key={tab}
@@ -350,6 +403,7 @@ export default function Home() {
                 <motion.div key="voice" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-4">
                   <h2 className="text-xs font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest mb-2 mt-2">Language Settings</h2>
                   <div className="space-y-2">
+<Tooltip text="Bangla">
                     <button
                       onClick={() => setVoiceLang("bn-BD")}
                       className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-colors ${
@@ -362,6 +416,8 @@ export default function Home() {
                       </div>
                       {voiceLang === "bn-BD" && <div className="w-2 h-2 rounded-full bg-indigo-600 dark:bg-indigo-500"></div>}
                     </button>
+                    </Tooltip>
+<Tooltip text="English">
                     <button
                       onClick={() => setVoiceLang("en-US")}
                       className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-colors ${
@@ -374,6 +430,7 @@ export default function Home() {
                       </div>
                       {voiceLang === "en-US" && <div className="w-2 h-2 rounded-full bg-indigo-600 dark:bg-indigo-500"></div>}
                     </button>
+                    </Tooltip>
                   </div>
                   
                   <div className="mt-4 pt-4 border-t border-slate-100 dark:border-zinc-800">
@@ -385,6 +442,15 @@ export default function Home() {
                        >
                          <div className={`w-3 h-3 bg-white rounded-full transition-transform ${autoTranslate ? 'translate-x-5' : 'translate-x-0'}`}></div>
                        </button>
+                     </div>
+
+                     <span className="text-sm font-semibold text-slate-600 dark:text-zinc-400 block mt-4">Recent Transcriptions</span>
+                     <div className="mt-2 space-y-2">
+                        {history.map((h, i) => (
+                            <button key={i} onClick={() => { setTranscript(h); setOutputTab("Original"); }} className="w-full text-xs text-left p-2 rounded-lg bg-slate-50 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 truncate hover:text-indigo-600">
+                                {h}
+                            </button>
+                        ))}
                      </div>
                   </div>
                 </motion.div>
@@ -432,15 +498,22 @@ export default function Home() {
               {isRecording && (
                 <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-white/20 via-transparent to-transparent animate-pulse delay-100" />
               )}
-              <div className={`w-16 h-16 ${isRecording ? "bg-white/30 ring-4 ring-white/50 animate-pulse duration-1000 scale-110" : "bg-white/20"} rounded-full flex items-center justify-center transition-all duration-500 z-10`}>
-                <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-inner relative">
-                  {isRecording ? (
-                    <StopCircle className="w-6 h-6 text-red-500 scale-90" />
-                  ) : (
-                    <Mic className="w-6 h-6 text-indigo-600" />
-                  )}
+              {isRecording ? (
+                <div className="flex items-end justify-center gap-1 h-12 w-20">
+                    {volumeBars.map((h, i) => (
+                        <motion.div 
+                            key={i}
+                            animate={{ height: `${h * 100}%` }}
+                            transition={{ type: "tween", ease: "linear", duration: 0.1 }}
+                            className="w-2 bg-white rounded-t-full"
+                        />
+                    ))}
                 </div>
-              </div>
+              ) : (
+                <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-inner relative">
+                  <Mic className="w-6 h-6 text-indigo-600" />
+                </div>
+              )}
               <p className="font-bold text-lg font-sans z-10">{isRecording ? "Listening..." : "Tap to Speak"}</p>
               <p className={`text-xs font-semibold z-10 ${isRecording ? "text-red-100" : "text-indigo-100"}`}>
                 {isRecording ? "Recording active" : "Ready to dictate"}
@@ -451,21 +524,21 @@ export default function Home() {
 
         {/* Main Workspace */}
         <div className="col-span-1 lg:col-span-9 flex flex-col gap-6 font-bangla">
-          <div className="flex-1 min-h-[400px] bg-white dark:bg-zinc-900 rounded-[32px] border border-slate-200 dark:border-zinc-800 shadow-sm flex flex-col">
-            <div className="p-4 sm:p-6 border-b border-slate-100 dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 font-sans">
-              <div className="flex gap-2 p-1 bg-slate-100 dark:bg-zinc-800 rounded-2xl overflow-x-auto hide-scrollbar">
+          <div className="flex-1 min-h-[400px] bg-white/5 backdrop-blur-md rounded-[32px] border border-white/10 shadow-xl flex flex-col">
+            <div className="p-4 sm:p-6 border-b border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4 font-sans">
+              <div className="flex gap-2 p-1 bg-black/20 rounded-2xl overflow-x-auto hide-scrollbar">
                 {(["Original", "Refine", "AI Prompt"] as const).map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setOutputTab(tab)}
                     className={`px-4 sm:px-6 py-2 rounded-xl text-sm font-semibold whitespace-nowrap transition-colors relative z-10 ${
-                      outputTab === tab ? "text-indigo-600 dark:text-indigo-400" : "text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-200"
+                      outputTab === tab ? "text-white" : "text-indigo-200 hover:text-white"
                     }`}
                   >
                     {outputTab === tab && (
                       <motion.div
                         layoutId="outputTabIndicator"
-                        className="absolute inset-0 bg-white dark:bg-zinc-700 shadow-sm rounded-xl -z-10"
+                        className="absolute inset-0 bg-indigo-600 rounded-xl shadow-lg -z-10"
                         transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
                       />
                     )}
@@ -474,24 +547,25 @@ export default function Home() {
                 ))}
               </div>
               <div className="flex items-center gap-3 self-end sm:self-auto">
-                 <button
-                   onClick={() => handleCopy(getActiveText())}
-                   disabled={!getActiveText() || isProcessing}
-                   title="Copy text"
-                   className="p-2 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 disabled:opacity-50 transition-colors relative flex items-center justify-center w-9 h-9 rounded-lg"
-                 >
-                   <AnimatePresence mode="wait">
-                     {copying ? (
-                       <motion.div key="check" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }} transition={{ duration: 0.15 }}>
-                         <Check size={20} className="text-green-500" />
-                       </motion.div>
-                     ) : (
-                       <motion.div key="copy" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }} transition={{ duration: 0.15 }}>
-                         <Copy size={20} />
-                       </motion.div>
-                     )}
-                   </AnimatePresence>
-                 </button>
+                 <Tooltip text="Copy text">
+                   <button
+                     onClick={() => handleCopy(getActiveText())}
+                     disabled={!getActiveText() || isProcessing}
+                     className="p-2 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 disabled:opacity-50 transition-colors relative flex items-center justify-center w-9 h-9 rounded-lg"
+                   >
+                     <AnimatePresence mode="wait">
+                       {copying ? (
+                         <motion.div key="check" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }} transition={{ duration: 0.15 }}>
+                           <Check size={20} className="text-green-500" />
+                         </motion.div>
+                       ) : (
+                         <motion.div key="copy" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }} transition={{ duration: 0.15 }}>
+                           <Copy size={20} />
+                         </motion.div>
+                       )}
+                     </AnimatePresence>
+                   </button>
+                 </Tooltip>
               </div>
             </div>
 
@@ -552,19 +626,21 @@ export default function Home() {
                 <div className="mt-8 pt-8 border-t border-slate-100 dark:border-zinc-800">
                   <div className="flex items-center justify-between mb-4 font-sans">
                     <h3 className="text-xs font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">Translation ({translateTarget})</h3>
-                    <button onClick={() => handleCopy(translation)} className="text-slate-400 hover:text-indigo-600 transition-colors w-8 h-8 flex items-center justify-center relative rounded-md">
-                      <AnimatePresence mode="wait">
-                        {copying ? (
-                          <motion.div key="check" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }} transition={{ duration: 0.15 }}>
-                            <Check size={16} className="text-green-500" />
-                          </motion.div>
-                        ) : (
-                          <motion.div key="copy" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }} transition={{ duration: 0.15 }}>
-                            <Copy size={16} />
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </button>
+                    <Tooltip text="Copy translation">
+                      <button onClick={() => handleCopy(translation)} className="text-slate-400 hover:text-indigo-600 transition-colors w-8 h-8 flex items-center justify-center relative rounded-md">
+                        <AnimatePresence mode="wait">
+                          {copying ? (
+                            <motion.div key="check" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }} transition={{ duration: 0.15 }}>
+                              <Check size={16} className="text-green-500" />
+                            </motion.div>
+                          ) : (
+                            <motion.div key="copy" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }} transition={{ duration: 0.15 }}>
+                              <Copy size={16} />
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </button>
+                    </Tooltip>
                   </div>
                   <p className="text-lg sm:text-xl text-slate-600 dark:text-zinc-400 italic leading-relaxed">
                     {translation}
@@ -718,6 +794,48 @@ export default function Home() {
                         step="0.1"
                         value={temperature}
                         onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                        className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-bold text-slate-700 dark:text-zinc-300 mb-2">
+                        Transcription Sensitivity: {sensitivity.toFixed(1)}
+                    </label>
+                    <input
+                        type="range"
+                        min="0.1"
+                        max="1.0"
+                        step="0.1"
+                        value={sensitivity}
+                        onChange={(e) => setSensitivity(parseFloat(e.target.value))}
+                        className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-bold text-slate-700 dark:text-zinc-300 mb-2">
+                        Silence Threshold: {silenceThreshold.toFixed(2)}
+                    </label>
+                    <input
+                        type="range"
+                        min="0"
+                        max="0.5"
+                        step="0.01"
+                        value={silenceThreshold}
+                        onChange={(e) => setSilenceThreshold(parseFloat(e.target.value))}
+                        className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-bold text-slate-700 dark:text-zinc-300 mb-2">
+                        Silence Duration (seconds): {silenceDuration}
+                    </label>
+                    <input
+                        type="range"
+                        min="1"
+                        max="10"
+                        step="1"
+                        value={silenceDuration}
+                        onChange={(e) => setSilenceDuration(parseInt(e.target.value))}
                         className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
                     />
                 </div>

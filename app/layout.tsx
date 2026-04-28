@@ -15,7 +15,7 @@ const hindSiliguri = Hind_Siliguri({
 });
 
 export const metadata: Metadata = {
-  title: 'Bangla Voice Hub',
+  title: 'Voice Assistant',
   description: 'Complete Bangla and English voice-to-text, translation, and AI prompt web app.',
 };
 
